@@ -21,10 +21,11 @@ jobs:
       - name: Fetch LLVM-Mingw 20260505
         timeout-minutes: 10
         run: |
-          mkdir -p "$HOME/.cache/pes13-nx/toolchains"
+          mkdir -p "$PES_BUILD_ROOT/toolchains"
           curl -fL --retry 3 -o /tmp/llvm.tar.xz \
             https://github.com/mstorsjo/llvm-mingw/releases/download/20260505/llvm-mingw-20260505-ucrt-ubuntu-22.04-x86_64.tar.xz
-          tar -xJf /tmp/llvm.tar.xz -C "$HOME/.cache/pes13-nx/toolchains"
+          tar -xJf /tmp/llvm.tar.xz -C "$PES_BUILD_ROOT/toolchains"
+          ls -l "$PES_BUILD_ROOT/toolchains/llvm-mingw-20260505-ucrt-ubuntu-22.04-x86_64/bin/i686-w64-mingw32-clang"
 
       - name: Fetch FEXTendo v0.4.2
         timeout-minutes: 10
@@ -60,6 +61,18 @@ jobs:
           cd port
           bash tools/build-pe-wsl.sh dsound.dll
           ls -l "$PES_BUILD_ROOT/extra-dlls/dsound.dll"
+
+      - name: Diagnose build failure
+        if: failure()
+        run: |
+          echo "=== toolchain ==="
+          ls -l "$PES_BUILD_ROOT/toolchains" || true
+          echo "=== source ==="
+          ls -la "$PES_BUILD_ROOT/source" | head -40 || true
+          test -x "$PES_BUILD_ROOT/source/configure" && echo "configure: yes" || echo "configure: no"
+          test -d "$PES_BUILD_ROOT/source/wine-nx-probe/vendor/box64" && echo "box64: yes" || echo "box64: no"
+          echo "=== config.log ==="
+          find "$PES_BUILD_ROOT" -maxdepth 3 -name config.log -print -exec tail -60 {} \; || true
 
       - name: Upload dsound.dll
         if: always()
