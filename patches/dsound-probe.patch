@@ -1,0 +1,126 @@
+--- a/dlls/dsound/dsound.c
++++ b/dlls/dsound/dsound.c
+@@ -331,12 +331,24 @@
+     device->drvcaps.dwPrimaryBuffers = 1;
+     device->drvcaps.dwMinSecondarySampleRate = DSBFREQUENCY_MIN;
+     device->drvcaps.dwMaxSecondarySampleRate = DSBFREQUENCY_MAX;
+-    device->drvcaps.dwMaxHwMixingAllBuffers = 1;
++    /* Wine mixes everything in software, but DirectSound middleware such as
++     * the CRI ADX runtime in PES 2013 sizes its positional voice pool from
++     * these counts and silently drops 3D sounds when they are zero. */
++    device->drvcaps.dwMaxHwMixingAllBuffers = 32;
+     device->drvcaps.dwMaxHwMixingStaticBuffers = device->drvcaps.dwMaxHwMixingAllBuffers;
+     device->drvcaps.dwMaxHwMixingStreamingBuffers = device->drvcaps.dwMaxHwMixingAllBuffers;
+-    device->drvcaps.dwFreeHwMixingAllBuffers = 0;
+-    device->drvcaps.dwFreeHwMixingStaticBuffers = 0;
+-    device->drvcaps.dwFreeHwMixingStreamingBuffers = 0;
++    device->drvcaps.dwFreeHwMixingAllBuffers = 32;
++    device->drvcaps.dwFreeHwMixingStaticBuffers = 32;
++    device->drvcaps.dwFreeHwMixingStreamingBuffers = 32;
++    device->drvcaps.dwMaxHw3DAllBuffers = 32;
++    device->drvcaps.dwMaxHw3DStaticBuffers = 32;
++    device->drvcaps.dwMaxHw3DStreamingBuffers = 32;
++    device->drvcaps.dwFreeHw3DAllBuffers = 32;
++    device->drvcaps.dwFreeHw3DStaticBuffers = 32;
++    device->drvcaps.dwFreeHw3DStreamingBuffers = 32;
++    dsound_probe("caps maxmix=%lu freemix=%lu max3d=%lu free3d=%lu",
++        device->drvcaps.dwMaxHwMixingAllBuffers, device->drvcaps.dwFreeHwMixingAllBuffers,
++        device->drvcaps.dwMaxHw3DAllBuffers, device->drvcaps.dwFreeHw3DAllBuffers);
+ 
+     ZeroMemory(&device->volpan, sizeof(device->volpan));
+ 
+@@ -382,6 +394,12 @@
+         return DSERR_INVALIDPARAM;
+     }
+     *ppdsb = NULL;
++
++    dsound_probe("create flags=0x%08lx bytes=%lu from8=%d", dsbd->dwFlags, dsbd->dwBufferBytes, from8);
++    if (dsbd->lpwfxFormat)
++        dsound_probe("  fmt tag=0x%04x ch=%u rate=%lu bits=%u", dsbd->lpwfxFormat->wFormatTag,
++            dsbd->lpwfxFormat->nChannels, dsbd->lpwfxFormat->nSamplesPerSec,
++            dsbd->lpwfxFormat->wBitsPerSample);
+ 
+     if (TRACE_ON(dsound)) {
+         TRACE("(structsize=%ld)\n",dsbd->dwSize);
+@@ -747,7 +765,11 @@
+ {
+     IDirectSoundImpl *This = impl_from_IDirectSound8(iface);
+     TRACE("(%p,%p,%p,%p)\n", This, dsbd, ppdsb, lpunk);
+-    return DirectSoundDevice_CreateSoundBuffer(This->device, dsbd, ppdsb, lpunk, This->has_ds8);
++    {
++        HRESULT rc = DirectSoundDevice_CreateSoundBuffer(This->device, dsbd, ppdsb, lpunk, This->has_ds8);
++        dsound_probe("  -> rc=0x%08lx", (unsigned long)rc);
++        return rc;
++    }
+ }
+ 
+ static HRESULT WINAPI IDirectSound8Impl_GetCaps(IDirectSound8 *iface, DSCAPS *dscaps)
+@@ -791,6 +813,9 @@
+     dscaps->dwMaxContigFreeHwMemBytes      = This->device->drvcaps.dwMaxContigFreeHwMemBytes;
+     dscaps->dwUnlockTransferRateHwBuffers  = This->device->drvcaps.dwUnlockTransferRateHwBuffers;
+     dscaps->dwPlayCpuOverheadSwBuffers     = This->device->drvcaps.dwPlayCpuOverheadSwBuffers;
++    dsound_probe("GetCaps flags=0x%08lx maxmix=%lu freemix=%lu max3d=%lu free3d=%lu",
++        dscaps->dwFlags, dscaps->dwMaxHwMixingAllBuffers, dscaps->dwFreeHwMixingAllBuffers,
++        dscaps->dwMaxHw3DAllBuffers, dscaps->dwFreeHw3DAllBuffers);
+ 
+     if (TRACE_ON(dsound)) {
+         TRACE("(flags=0x%08lx:\n", dscaps->dwFlags);
+--- a/dlls/dsound/buffer.c
++++ b/dlls/dsound/buffer.c
+@@ -316,6 +316,8 @@
+ 	AcquireSRWLockExclusive(&This->lock);
+ 
+ 	This->playflags = flags;
++	dsound_probe("play buf=%p flags=0x%08lx ctrl3d=%d", This, flags,
++	    (This->dsbd.dwFlags & DSBCAPS_CTRL3D) ? 1 : 0);
+ 	if (This->state == STATE_STOPPED) {
+ 		This->state = STATE_STARTING;
+ 	}
+@@ -957,6 +959,8 @@
+ 
+ 	*ppobj = NULL;	/* assume failure */
+ 
++	dsound_probe("qi buf=%p riid=%s", This, debugstr_guid(riid));
++
+ 	if ( IsEqualGUID(riid, &IID_IUnknown) ||
+ 	     IsEqualGUID(riid, &IID_IDirectSoundBuffer) ||
+ 	     IsEqualGUID(riid, &IID_IDirectSoundBuffer8) ) {
+--- a/dlls/dsound/dsound_private.h
++++ b/dlls/dsound/dsound_private.h
+@@ -31,6 +31,36 @@
+ #include "uuids.h"
+ 
+ #include "wine/list.h"
++
++#include <stdarg.h>
++#include <stdio.h>
++
++/* TEMPORARY DIAGNOSTIC: append one line to C:\\dsound-probe.log. */
++static inline void dsound_probe(const char *fmt, ...)
++{
++    static int probe_budget = 4000;
++    char buf[400];
++    va_list ap;
++    int n;
++    HANDLE h;
++    DWORD written;
++
++    if (probe_budget <= 0) return;
++    va_start(ap, fmt);
++    n = vsnprintf(buf, sizeof(buf) - 2, fmt, ap);
++    va_end(ap);
++    if (n < 0) return;
++    if (n > (int)sizeof(buf) - 2) n = sizeof(buf) - 2;
++    buf[n++] = '\r';
++    buf[n++] = '\n';
++    probe_budget--;
++    h = CreateFileW(L"C:\\dsound-probe.log", FILE_APPEND_DATA,
++                    FILE_SHARE_READ | FILE_SHARE_WRITE, NULL, OPEN_ALWAYS,
++                    FILE_ATTRIBUTE_NORMAL, NULL);
++    if (h == INVALID_HANDLE_VALUE) return;
++    WriteFile(h, buf, n, &written, NULL);
++    CloseHandle(h);
++}
+ 
+ #define DS_MAX_CHANNELS 6
+ 
