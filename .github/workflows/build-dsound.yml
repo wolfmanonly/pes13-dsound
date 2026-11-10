@@ -45,6 +45,15 @@ jobs:
           cd "$PES_BUILD_ROOT/source"
           patch -p1 < "$GITHUB_WORKSPACE/port/patches/wine-nx.patch"
 
+      - name: Copy FEXTendo runtime files
+        run: |
+          mkdir -p "$PES_BUILD_ROOT/source/wine-nx-probe/source"
+          cp port/src/runtime/pes13_preload.c "$PES_BUILD_ROOT/source/wine-nx-probe/source/"
+          cp port/src/runtime/pes13_graphics.h "$PES_BUILD_ROOT/source/wine-nx-probe/source/"
+          cp port/src/runtime/pes13_controller.h "$PES_BUILD_ROOT/source/wine-nx-probe/source/"
+          cp port/src/runtime/pes13_controller_ui.h "$PES_BUILD_ROOT/source/wine-nx-probe/source/"
+          cp port/src/runtime/pes13_registry.h "$PES_BUILD_ROOT/source/dlls/ntdll/unix/"
+
       - name: Fetch Box64
         timeout-minutes: 10
         run: |
@@ -70,9 +79,10 @@ jobs:
           echo "=== source ==="
           ls -la "$PES_BUILD_ROOT/source" | head -40 || true
           test -x "$PES_BUILD_ROOT/source/configure" && echo "configure: yes" || echo "configure: no"
+          test -f "$PES_BUILD_ROOT/source/dlls/ntdll/unix/pes13_registry.h" && echo "pes13_registry: yes" || echo "pes13_registry: no"
           test -d "$PES_BUILD_ROOT/source/wine-nx-probe/vendor/box64" && echo "box64: yes" || echo "box64: no"
           echo "=== config.log ==="
-          find "$PES_BUILD_ROOT" -maxdepth 3 -name config.log -print -exec tail -60 {} \; || true
+          find "$PES_BUILD_ROOT" -maxdepth 3 -name config.log -print -exec tail -80 {} \; || true
 
       - name: Upload dsound.dll
         if: always()
