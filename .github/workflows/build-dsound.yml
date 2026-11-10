@@ -1,9 +1,20 @@
 name: build-dsound
 
-on: workflow_dispatch
+on:
+  workflow_dispatch:
+    inputs:
+      logging:
+        description: "编译带 C:\\dsound-probe.log 日志的版本（关掉则只应用 caps 修改）"
+        type: boolean
+        default: true
 
 env:
   PES_BUILD_ROOT: ${{ github.workspace }}/build
+  TOOLCHAIN: ${{ github.workspace }}/build/toolchains/llvm-mingw-20260505-ucrt-ubuntu-22.04-x86_64
+
+concurrency:
+  group: build-dsound-${{ github.ref }}
+  cancel-in-progress: false
 
 jobs:
   build:
@@ -22,28 +33,32 @@ jobs:
         timeout-minutes: 10
         run: |
           mkdir -p "$PES_BUILD_ROOT/toolchains"
-          curl -fL --retry 3 -o /tmp/llvm.tar.xz \
+          curl -fL --retry 3 --retry-delay 2 -o /tmp/llvm.tar.xz \
             https://github.com/mstorsjo/llvm-mingw/releases/download/20260505/llvm-mingw-20260505-ucrt-ubuntu-22.04-x86_64.tar.xz
           tar -xJf /tmp/llvm.tar.xz -C "$PES_BUILD_ROOT/toolchains"
-          ls -l "$PES_BUILD_ROOT/toolchains/llvm-mingw-20260505-ucrt-ubuntu-22.04-x86_64/bin/i686-w64-mingw32-clang"
+          test -x "$TOOLCHAIN/bin/i686-w64-mingw32-clang"
+          "$TOOLCHAIN/bin/i686-w64-mingw32-clang" --version | head -2
 
       - name: Fetch FEXTendo v0.4.2
         timeout-minutes: 10
         run: |
-          curl -fL --retry 3 -o /tmp/port.tar.gz \
+          curl -fL --retry 3 --retry-delay 2 -o /tmp/port.tar.gz \
             https://github.com/Ibnuard/pes13_nx/archive/refs/tags/v0.4.2.tar.gz
           mkdir -p port
           tar -xzf /tmp/port.tar.gz -C port --strip-components=1
+          test -f port/tools/build-pe-wsl.sh
+          test -f port/patches/wine-nx.patch
 
       - name: Fetch Wine-NX source
         timeout-minutes: 15
         run: |
           mkdir -p "$PES_BUILD_ROOT/source"
-          curl -fL --retry 3 -o /tmp/wine.tar.gz \
+          curl -fL --retry 3 --retry-delay 2 -o /tmp/wine.tar.gz \
             https://github.com/autorunhq/autorun/archive/1bc4e45163f0d2328cdfd35c7f471dd9821bb879.tar.gz
           tar -xzf /tmp/wine.tar.gz -C "$PES_BUILD_ROOT/source" --strip-components=1
           cd "$PES_BUILD_ROOT/source"
-          patch -p1 < "$GITHUB_WORKSPACE/port/patches/wine-nx.patch"
+          # --fuzz=0：源码包已按 commit 固定，任何偏移都说明补丁和源码对不上。
+          patch -p1 --fuzz=0 < "$GITHUB_WORKSPACE/port/patches/wine-nx.patch"
 
       - name: Copy FEXTendo runtime files
         run: |
@@ -57,13 +72,28 @@ jobs:
       - name: Apply dsound fix
         run: |
           cd "$PES_BUILD_ROOT/source"
-          patch -p1 < "$GITHUB_WORKSPACE/patches/dsound-fix.patch"
+          patch -p1 --dry-run --fuzz=0 < "$GITHUB_WORKSPACE/patches/dsound-fix.patch"
+          patch -p1 --fuzz=0 < "$GITHUB_WORKSPACE/patches/dsound-fix.patch"
+          grep -c "Wine has no hardware mixer" dlls/dsound/dsound.c
+
+      - name: Apply voice-pool patch
+        run: |
+          cd "$PES_BUILD_ROOT/source"
+          if [ "${{ inputs.logging }}" = "true" ]; then
+            PATCH="$GITHUB_WORKSPACE/patches/dsound-probe.patch"
+          else
+            PATCH="$GITHUB_WORKSPACE/patches/dsound-hwcaps.patch"
+          fi
+          echo "applying $PATCH"
+          patch -p1 --dry-run --fuzz=0 < "$PATCH"
+          patch -p1 --fuzz=0 < "$PATCH"
+          grep -c "dwMaxHw3DAllBuffers = 32" dlls/dsound/dsound.c
 
       - name: Fetch Box64
         timeout-minutes: 10
         run: |
           mkdir -p "$PES_BUILD_ROOT/source/wine-nx-probe/vendor/box64"
-          curl -fL --retry 3 -o /tmp/box64.tar.gz \
+          curl -fL --retry 3 --retry-delay 2 -o /tmp/box64.tar.gz \
             https://github.com/ptitSeb/box64/archive/dae0917c47b4edd8956f314210417a20fd225c4b.tar.gz
           tar -xzf /tmp/box64.tar.gz -C "$PES_BUILD_ROOT/source/wine-nx-probe/vendor/box64" --strip-components=1
 
@@ -76,6 +106,22 @@ jobs:
           bash tools/build-pe-wsl.sh dsound.dll
           ls -l "$PES_BUILD_ROOT/extra-dlls/dsound.dll"
 
+      - name: Verify dsound.dll
+        run: |
+          DLL="$PES_BUILD_ROOT/extra-dlls/dsound.dll" python3 - <<'PY'
+          import hashlib, os, struct
+          p = os.environ["DLL"]
+          b = open(p, "rb").read()
+          pe = struct.unpack_from("<I", b, 0x3C)[0]
+          machine, sections = struct.unpack_from("<HH", b, pe + 4)
+          print(f"size={len(b)} machine=0x{machine:04x} sections={sections}")
+          print("sha256=" + hashlib.sha256(b).hexdigest())
+          assert machine == 0x14C, f"not i386: machine=0x{machine:04x}"
+          assert 150_000 < len(b) < 3_000_000, f"suspicious size: {len(b)}"
+          assert b"DirectSoundCreate8" in b, "exports not found in image"
+          print("OK: i386 PE DLL with DirectSoundCreate8")
+          PY
+
       - name: Diagnose build failure
         if: failure()
         run: |
@@ -87,15 +133,31 @@ jobs:
           test -f "$PES_BUILD_ROOT/source/dlls/ntdll/unix/pes13_registry.h" && echo "pes13_registry: yes" || echo "pes13_registry: no"
           test -d "$PES_BUILD_ROOT/source/wine-nx-probe/vendor/box64" && echo "box64: yes" || echo "box64: no"
           echo "=== config.log ==="
-          find "$PES_BUILD_ROOT" -maxdepth 3 -name config.log -print -exec tail -80 {} \; || true
+          for f in $(find "$PES_BUILD_ROOT" -maxdepth 3 -name config.log); do
+            echo "--- $f"
+            grep -nE "error|not found|cannot" "$f" | tail -30 || true
+            tail -60 "$f" || true
+          done
+
+      - name: Job summary
+        if: success()
+        run: |
+          {
+            echo "### dsound.dll (logging=${{ inputs.logging }})"
+            echo '```'
+            ls -l "$PES_BUILD_ROOT/extra-dlls/dsound.dll"
+            sha256sum "$PES_BUILD_ROOT/extra-dlls/dsound.dll"
+            echo '```'
+            echo "原版基线：1,200,128 B / 6258E908BC589AD916268655B4892840900DD7584A4FDDF8AE36F9E91FFE46A6（含 DWARF，体积不可直接比较）"
+          } >> "$GITHUB_STEP_SUMMARY"
 
       - name: Upload dsound.dll
-        if: always()
+        if: success()
         uses: actions/upload-artifact@v4
         with:
           name: dsound-dll
           path: ${{ github.workspace }}/build/extra-dlls/dsound.dll
-          if-no-files-found: warn
+          if-no-files-found: error
 
       - name: Upload dsound source
         if: always()
