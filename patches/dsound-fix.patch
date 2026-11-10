@@ -1,0 +1,57 @@
+--- a/dlls/dsound/dsound.c
++++ b/dlls/dsound/dsound.c
+@@ -392,12 +392,9 @@
+         TRACE("(lpwfxFormat=%p)\n",dsbd->lpwfxFormat);
+     }
+ 
+-    if (!(dsbd->dwFlags & DSBCAPS_PRIMARYBUFFER) &&
+-        dsbd->dwFlags & DSBCAPS_LOCHARDWARE)
+-    {
+-        WARN("unable to create hardware buffer\n");
+-        return DSERR_UNSUPPORTED;
+-    }
++    /* Wine has no hardware mixer.  Some games (CRI ADX titles such as PES 2013)
++     * request DSBCAPS_LOCHARDWARE for 3D positional effects and never retry in
++     * software, so emulate the buffer instead of failing the creation. */
+ 
+     if (dsbd->dwFlags & DSBCAPS_PRIMARYBUFFER) {
+         if (dsbd->lpwfxFormat != NULL) {
+@@ -413,6 +410,12 @@
+         }
+ 
+         if (device->primary) {
++            /* Merge capability flags.  A later caller can request CTRL3D or
++             * CTRLVOLUME on the already-created primary buffer; Windows keeps
++             * those capabilities, so ADX can enable its positional path. */
++            device->primary->dsbd.dwFlags |=
++                dsbd->dwFlags & ~(DSBCAPS_LOCHARDWARE | DSBCAPS_LOCSOFTWARE |
++                                  DSBCAPS_PRIMARYBUFFER);
+             WARN("Primary Buffer already created\n");
+             IDirectSoundBuffer8_AddRef(&device->primary->IDirectSoundBuffer8_iface);
+             *ppdsb = (IDirectSoundBuffer *)&device->primary->IDirectSoundBuffer8_iface;
+@@ -507,7 +510,8 @@
+ 
+         hres = secondarybuffer_create(device, dsbd, ppdsb);
+         if (SUCCEEDED(hres)) {
+-            if (dsbd->dwFlags & DSBCAPS_LOCHARDWARE)
++            if ((dsbd->dwFlags & DSBCAPS_LOCHARDWARE) &&
++                device->drvcaps.dwFreeHwMixingAllBuffers)
+                 device->drvcaps.dwFreeHwMixingAllBuffers--;
+         } else
+             WARN("IDirectSoundBufferImpl_Create failed\n");
+--- a/dlls/dsound/buffer.c
++++ b/dlls/dsound/buffer.c
+@@ -1067,6 +1067,13 @@
+ 	/* size depends on version */
+ 	CopyMemory(&dsb->dsbd, dsbd, dsbd->dwSize);
+ 
++	/* Wine mixes everything in software; report this buffer as software even
++	 * if the caller asked for a hardware voice. */
++	if (dsb->dsbd.dwFlags & DSBCAPS_LOCHARDWARE) {
++		dsb->dsbd.dwFlags &= ~DSBCAPS_LOCHARDWARE;
++		dsb->dsbd.dwFlags |= DSBCAPS_LOCSOFTWARE;
++	}
++
+ 	dsb->pwfx = DSOUND_CopyFormat(wfex);
+         if (!dsb->pwfx) {
+                 IDirectSoundBuffer8_Release(&dsb->IDirectSoundBuffer8_iface);
