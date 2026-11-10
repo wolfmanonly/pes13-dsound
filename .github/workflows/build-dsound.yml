@@ -54,6 +54,11 @@ jobs:
           cp port/src/runtime/pes13_controller_ui.h "$PES_BUILD_ROOT/source/wine-nx-probe/source/"
           cp port/src/runtime/pes13_registry.h "$PES_BUILD_ROOT/source/dlls/ntdll/unix/"
 
+      - name: Apply dsound fix
+        run: |
+          cd "$PES_BUILD_ROOT/source"
+          patch -p1 < "$GITHUB_WORKSPACE/patches/dsound-fix.patch"
+
       - name: Fetch Box64
         timeout-minutes: 10
         run: |
