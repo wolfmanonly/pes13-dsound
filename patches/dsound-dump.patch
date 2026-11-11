@@ -1,0 +1,58 @@
+--- a/dlls/dsound/buffer.c
++++ b/dlls/dsound/buffer.c
+@@ -34,6 +34,46 @@
+ #include "dsconf.h"
+ 
+ WINE_DEFAULT_DEBUG_CHANNEL(dsound);
++
++static void dsound_dump_6ch(IDirectSoundBufferImpl *dsb)
++{
++    static LONG dumped;
++    char info[160];
++    int len, i;
++    HANDLE h;
++    DWORD written;
++
++    if (!dsb->buffer || !dsb->buffer->memory || dsb->pwfx->nChannels != 6)
++        return;
++
++    for (i = 0; i < (int)dsb->buflen; i++)
++        if (dsb->buffer->memory[i])
++            break;
++    if (i == (int)dsb->buflen)
++        return; /* silent pool buffer, wait for a filled one */
++
++    if (InterlockedExchange(&dumped, 1))
++        return;
++
++    h = CreateFileA("C:\\dsound-dump.raw", GENERIC_WRITE, 0, NULL,
++                    CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, NULL);
++    if (h != INVALID_HANDLE_VALUE) {
++        WriteFile(h, dsb->buffer->memory, dsb->buflen, &written, NULL);
++        CloseHandle(h);
++    }
++
++    len = wsprintfA(info,
++                    "devch=%u bufch=%u buflen=%lu vol=%ld pan=%ld flags=0x%08lx\r\n",
++                    dsb->device->pwfx->nChannels, dsb->pwfx->nChannels, dsb->buflen,
++                    dsb->volpan.lVolume, dsb->volpan.lPan, dsb->dsbd.dwFlags);
++    h = CreateFileA("C:\\dsound-dump.txt", GENERIC_WRITE, 0, NULL,
++                    CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, NULL);
++    if (h != INVALID_HANDLE_VALUE) {
++        WriteFile(h, info, len, &written, NULL);
++        CloseHandle(h);
++    }
++}
++
+ 
+ /*******************************************************************************
+  *		IDirectSoundNotify
+@@ -662,6 +702,8 @@
+ 	if (!p2)
+ 		x2 = 0;
+ 
++	dsound_dump_6ch(This);
++
+ 	if((p1 && ((BYTE*)p1 < This->buffer->memory || (BYTE*)p1 >= This->buffer->memory + This->buflen)) ||
+ 	   (p2 && ((BYTE*)p2 < This->buffer->memory || (BYTE*)p2 >= This->buffer->memory + This->buflen)))
+ 		return DSERR_INVALIDPARAM;
