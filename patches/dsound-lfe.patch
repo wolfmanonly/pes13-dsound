@@ -1,0 +1,28 @@
+--- a/dlls/dsound/dsound_convert.c
++++ b/dlls/dsound/dsound_convert.c
+@@ -242,7 +242,11 @@
+         break;
+ 
+     case 3:
+-        /* LFE is totally ignored in dsound when downmixing to 2 channels */
++        /* PES/ADX can place positional effects in the LFE/centre slots;
++         * fold LFE into both channels instead of dropping it. */
++        value *= 0.7f;
++        dsb->put_aux(dsb, pos, 0, value);
++        dsb->put_aux(dsb, pos, 1, value);
+         break;
+     }
+ }
+@@ -289,7 +293,11 @@
+         break;
+ 
+     case 3:
+-        /* LFE is totally ignored in dsound when downmixing to 2 channels */
++        /* PES/ADX can place positional effects in the LFE/centre slots;
++         * fold LFE into both channels instead of dropping it. */
++        value *= 0.7f;
++        dsb->put_aux(dsb, pos, 0, value);
++        dsb->put_aux(dsb, pos, 1, value);
+         break;
+     }
+ }
