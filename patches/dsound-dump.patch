@@ -1,29 +1,35 @@
 --- a/dlls/dsound/buffer.c
 +++ b/dlls/dsound/buffer.c
-@@ -34,6 +34,46 @@
- #include "dsconf.h"
+@@ -35,6 +35,54 @@
  
  WINE_DEFAULT_DEBUG_CHANNEL(dsound);
-+
-+static void dsound_dump_6ch(IDirectSoundBufferImpl *dsb)
+ 
++static void dsound_dump_best(IDirectSoundBufferImpl *dsb)
 +{
-+    static LONG dumped;
-+    char info[160];
-+    int len, i;
++    static LONG best_peak;
++    const short *pcm;
++    int samples, i, peak = 0;
++    char info[192];
++    int len;
 +    HANDLE h;
 +    DWORD written;
 +
-+    if (!dsb->buffer || !dsb->buffer->memory || dsb->pwfx->nChannels != 6)
++    if (!dsb->buffer || !dsb->buffer->memory || dsb->pwfx->wBitsPerSample != 16 ||
++        dsb->pwfx->nChannels != 6)
 +        return;
 +
-+    for (i = 0; i < (int)dsb->buflen; i++)
-+        if (dsb->buffer->memory[i])
-+            break;
-+    if (i == (int)dsb->buflen)
-+        return; /* silent pool buffer, wait for a filled one */
-+
-+    if (InterlockedExchange(&dumped, 1))
++    samples = dsb->buflen / 2;
++    pcm = (const short *)dsb->buffer->memory;
++    for (i = 0; i < samples; i++) {
++        int v = pcm[i];
++        if (v < 0)
++            v = -v;
++        if (v > peak)
++            peak = v;
++    }
++    if (peak <= best_peak)
 +        return;
++    best_peak = peak;
 +
 +    h = CreateFileA("C:\\dsound-dump.raw", GENERIC_WRITE, 0, NULL,
 +                    CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, NULL);
@@ -33,9 +39,10 @@
 +    }
 +
 +    len = wsprintfA(info,
-+                    "devch=%u bufch=%u buflen=%lu vol=%ld pan=%ld flags=0x%08lx\r\n",
-+                    dsb->device->pwfx->nChannels, dsb->pwfx->nChannels, dsb->buflen,
-+                    dsb->volpan.lVolume, dsb->volpan.lPan, dsb->dsbd.dwFlags);
++                    "peak=%d devch=%u bufch=%u buflen=%lu vol=%ld pan=%ld flags=0x%08lx\r\n",
++                    peak, dsb->device->pwfx->nChannels, dsb->pwfx->nChannels,
++                    dsb->buflen, dsb->volpan.lVolume, dsb->volpan.lPan,
++                    dsb->dsbd.dwFlags);
 +    h = CreateFileA("C:\\dsound-dump.txt", GENERIC_WRITE, 0, NULL,
 +                    CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, NULL);
 +    if (h != INVALID_HANDLE_VALUE) {
@@ -44,15 +51,16 @@
 +    }
 +}
 +
- 
++
  /*******************************************************************************
   *		IDirectSoundNotify
-@@ -662,6 +702,8 @@
- 	if (!p2)
- 		x2 = 0;
+  */
+@@ -312,6 +360,8 @@
+ 	int i;
  
-+	dsound_dump_6ch(This);
+ 	TRACE("(%p,%08lx,%08lx,%08lx)\n",This,reserved1,reserved2,flags);
 +
- 	if((p1 && ((BYTE*)p1 < This->buffer->memory || (BYTE*)p1 >= This->buffer->memory + This->buflen)) ||
- 	   (p2 && ((BYTE*)p2 < This->buffer->memory || (BYTE*)p2 >= This->buffer->memory + This->buflen)))
- 		return DSERR_INVALIDPARAM;
++	dsound_dump_best(This);
+ 
+ 	AcquireSRWLockExclusive(&This->lock);
+ 
