@@ -95,7 +95,7 @@ jobs:
           cd "$PES_BUILD_ROOT/source"
           patch -p1 --dry-run --fuzz=0 < "$GITHUB_WORKSPACE/patches/dsound-dump.patch"
           patch -p1 --fuzz=0 < "$GITHUB_WORKSPACE/patches/dsound-dump.patch"
-          grep -c "dsound_dump_6ch" dlls/dsound/buffer.c
+          grep -c "dsound_dump_best" dlls/dsound/buffer.c
 
       - name: Apply voice-pool patch
         run: |
