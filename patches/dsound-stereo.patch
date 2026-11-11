@@ -1,0 +1,17 @@
+--- a/dlls/dsound/primary.c
++++ b/dlls/dsound/primary.c
+@@ -196,6 +196,14 @@
+         wfe = *mixwfe;
+         CoTaskMemFree(mixwfe);
+ 
++        /* The Switch audout backend is stereo.  Some drivers report 5.1 here
++         * and the game then creates 6-channel buffers whose centre/LFE
++         * content is lost.  Request stereo so dsound downmixes to 2.0. */
++        if (wfe.Format.nChannels > 2) {
++            wfe.Format.nChannels = 2;
++            wfe.dwChannelMask = SPEAKER_FRONT_LEFT | SPEAKER_FRONT_RIGHT;
++        }
++
+         wfe.Format.wFormatTag = WAVE_FORMAT_EXTENSIBLE;
+         wfe.SubFormat = KSDATAFORMAT_SUBTYPE_IEEE_FLOAT;
+         wfe.Samples.wValidBitsPerSample = wfe.Format.wBitsPerSample = 32;
