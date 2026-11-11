@@ -76,6 +76,13 @@ jobs:
           patch -p1 --fuzz=0 < "$GITHUB_WORKSPACE/patches/dsound-fix.patch"
           grep -c "Wine has no hardware mixer" dlls/dsound/dsound.c
 
+      - name: Apply LFE downmix patch
+        run: |
+          cd "$PES_BUILD_ROOT/source"
+          patch -p1 --dry-run --fuzz=0 < "$GITHUB_WORKSPACE/patches/dsound-lfe.patch"
+          patch -p1 --fuzz=0 < "$GITHUB_WORKSPACE/patches/dsound-lfe.patch"
+          grep -c "fold LFE into both channels" dlls/dsound/dsound_convert.c
+
       - name: Apply voice-pool patch
         run: |
           cd "$PES_BUILD_ROOT/source"
@@ -143,7 +150,7 @@ jobs:
         if: success()
         run: |
           {
-            echo "### dsound.dll (logging=${{ inputs.logging }})"
+            echo "### dsound.dll (logging=${{ inputs.logging }}, lfe=yes)"
             echo '```'
             ls -l "$PES_BUILD_ROOT/extra-dlls/dsound.dll"
             sha256sum "$PES_BUILD_ROOT/extra-dlls/dsound.dll"
