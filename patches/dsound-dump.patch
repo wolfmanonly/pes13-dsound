@@ -1,6 +1,6 @@
 --- a/dlls/dsound/buffer.c
 +++ b/dlls/dsound/buffer.c
-@@ -34,6 +34,80 @@
+@@ -34,6 +34,90 @@
  #include "dsconf.h"
  
  WINE_DEFAULT_DEBUG_CHANNEL(dsound);
@@ -36,6 +36,16 @@
 +    }
 +    if (peak < 1000)
 +        return;
++
++    if (peak > 3000) {
++        extern DWORD dsound_capture_until;
++        extern LONG dsound_capture_token;
++        DWORD now = GetTickCount();
++        if (!dsound_capture_until || now >= dsound_capture_until) {
++            InterlockedIncrement(&dsound_capture_token);
++            dsound_capture_until = now + 2000;
++        }
++    }
 +
 +    for (i = 0; i < nseen; i++)
 +        if (seen[i].ptr == dsb)
@@ -81,7 +91,7 @@
  
  /*******************************************************************************
   *		IDirectSoundNotify
-@@ -662,6 +736,8 @@
+@@ -662,6 +746,8 @@
  	if (!p2)
  		x2 = 0;
  
@@ -90,3 +100,83 @@
  	if((p1 && ((BYTE*)p1 < This->buffer->memory || (BYTE*)p1 >= This->buffer->memory + This->buflen)) ||
  	   (p2 && ((BYTE*)p2 < This->buffer->memory || (BYTE*)p2 >= This->buffer->memory + This->buflen)))
  		return DSERR_INVALIDPARAM;
+--- a/dlls/dsound/mixer.c
++++ b/dlls/dsound/mixer.c
+@@ -25,6 +25,7 @@
+ #include <assert.h>
+ #include <stdarg.h>
+ #include <math.h>	/* Insomnia - pow() function */
++#include <stdio.h>
+ 
+ #define COBJMACROS
+ 
+@@ -740,6 +741,59 @@
+  *   =[Volume]=> device->tmp_buffer (float format)
+  *   =[Reformat]=> device->buffer (device format, skipped on float)
+  */
++
++DWORD dsound_capture_until;
++LONG dsound_capture_token;
++
++static HANDLE capture_file;
++static LONG capture_token;
++static DWORD capture_bytes;
++static DWORD capture_limit;
++
++static void capture_mix(DirectSoundDevice *device, const void *buffer, DWORD bytes)
++{
++    DWORD now = GetTickCount();
++    DWORD written;
++    char info[160];
++    int len;
++
++    if (!dsound_capture_until || now >= dsound_capture_until)
++        return;
++
++    if (dsound_capture_token != capture_token) {
++        if (capture_file && capture_file != INVALID_HANDLE_VALUE)
++            CloseHandle(capture_file);
++        capture_file = CreateFileA("C:\\dsound-mix.raw", GENERIC_WRITE, 0, NULL,
++                                   CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, NULL);
++        capture_token = dsound_capture_token;
++        capture_bytes = 0;
++        capture_limit = device->pwfx->nSamplesPerSec * device->pwfx->nBlockAlign * 2;
++
++        len = snprintf(info, sizeof(info),
++                       "rate=%lu ch=%u bits=%u tag=0x%04x block=%u\r\n",
++                       device->pwfx->nSamplesPerSec, device->pwfx->nChannels,
++                       device->pwfx->wBitsPerSample, device->pwfx->wFormatTag,
++                       device->pwfx->nBlockAlign);
++        {
++            HANDLE h = CreateFileA("C:\\dsound-mix.txt", GENERIC_WRITE, 0, NULL,
++                                   CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, NULL);
++            if (h != INVALID_HANDLE_VALUE) {
++                WriteFile(h, info, len, &written, NULL);
++                CloseHandle(h);
++            }
++        }
++    }
++
++    if (!capture_file || capture_file == INVALID_HANDLE_VALUE)
++        return;
++    if (capture_bytes >= capture_limit)
++        return;
++    if (bytes > capture_limit - capture_bytes)
++        bytes = capture_limit - capture_bytes;
++    WriteFile(capture_file, buffer, bytes, &written, NULL);
++    capture_bytes += written;
++}
++
+ static void DSOUND_PerformMix(DirectSoundDevice *device)
+ {
+ 	DWORD block, pad_bytes, frames;
+@@ -804,6 +858,9 @@
+ 
+ 			device->normfunction(device->buffer, buffer, frames * device->pwfx->nChannels);
+ 		}
++
++		if (dsound_capture_until && GetTickCount() < dsound_capture_until)
++			capture_mix(device, buffer, frames * block);
+ 
+ 		hr = IAudioRenderClient_ReleaseBuffer(device->render, frames, 0);
+ 		if(FAILED(hr))
