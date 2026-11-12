@@ -91,19 +91,32 @@
  /*******************************************************************************
   *		IDirectSoundNotify
   */
-@@ -218,6 +302,11 @@
- 		WARN("invalid parameter: vol = %ld\n", vol);
+@@ -219,6 +303,11 @@
  		return DSERR_INVALIDPARAM;
  	}
-+
+ 
 +	/* CRI ADX attenuates short 6-channel effects far too much under Wine;
 +	 * force anything below -15 dB to full scale so the effect is audible. */
 +	if (This->pwfx->nChannels == 6 && vol < -1500)
 +		vol = 0;
- 
++
  	AcquireSRWLockExclusive(&This->lock);
  
-@@ -662,6 +751,8 @@
+ 	if (This->dsbd.dwFlags & DSBCAPS_CTRL3D) {
+@@ -314,6 +403,12 @@
+ 	TRACE("(%p,%08lx,%08lx,%08lx)\n",This,reserved1,reserved2,flags);
+ 
+ 	AcquireSRWLockExclusive(&This->lock);
++
++	/* ADX marks short 6-channel effects as looping and relies on a later
++	 * Stop that never arrives under Wine; play them once so the voice is
++	 * released and the next effect can be allocated. */
++	if (This->pwfx->nChannels == 6 && This->buflen <= 65536)
++		flags &= ~DSBPLAY_LOOPING;
+ 
+ 	This->playflags = flags;
+ 	if (This->state == STATE_STOPPED) {
+@@ -662,6 +757,8 @@
  	if (!p2)
  		x2 = 0;
  
