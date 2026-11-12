@@ -1,10 +1,9 @@
 --- a/dlls/dsound/buffer.c
 +++ b/dlls/dsound/buffer.c
-@@ -34,6 +34,90 @@
- #include "dsconf.h"
+@@ -35,6 +35,90 @@
  
  WINE_DEFAULT_DEBUG_CHANNEL(dsound);
-+
+ 
 +static void dsound_dump_best(IDirectSoundBufferImpl *dsb)
 +{
 +    static struct { void *ptr; int peak; } seen[24];
@@ -88,10 +87,23 @@
 +    }
 +}
 +
- 
++
  /*******************************************************************************
   *		IDirectSoundNotify
-@@ -662,6 +746,8 @@
+  */
+@@ -218,6 +302,11 @@
+ 		WARN("invalid parameter: vol = %ld\n", vol);
+ 		return DSERR_INVALIDPARAM;
+ 	}
++
++	/* CRI ADX leaves short 6-channel effects at DSBVOLUME_MIN under Wine;
++	 * lift only extreme attenuation so normal music/crowd volumes stay. */
++	if (This->pwfx->nChannels == 6 && vol < -3000)
++		vol = -1200;
+ 
+ 	AcquireSRWLockExclusive(&This->lock);
+ 
+@@ -662,6 +751,8 @@
  	if (!p2)
  		x2 = 0;
  
