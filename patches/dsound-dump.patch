@@ -1,9 +1,10 @@
 --- a/dlls/dsound/buffer.c
 +++ b/dlls/dsound/buffer.c
-@@ -35,6 +35,90 @@
+@@ -34,6 +34,90 @@
+ #include "dsconf.h"
  
  WINE_DEFAULT_DEBUG_CHANNEL(dsound);
- 
++
 +static void dsound_dump_best(IDirectSoundBufferImpl *dsb)
 +{
 +    static struct { void *ptr; int peak; } seen[24];
@@ -87,36 +88,10 @@
 +    }
 +}
 +
-+
+ 
  /*******************************************************************************
   *		IDirectSoundNotify
-  */
-@@ -219,6 +303,11 @@
- 		return DSERR_INVALIDPARAM;
- 	}
- 
-+	/* CRI ADX attenuates short 6-channel effects far too much under Wine;
-+	 * force anything below -15 dB to full scale so the effect is audible. */
-+	if (This->pwfx->nChannels == 6 && vol < -1500)
-+		vol = 0;
-+
- 	AcquireSRWLockExclusive(&This->lock);
- 
- 	if (This->dsbd.dwFlags & DSBCAPS_CTRL3D) {
-@@ -314,6 +403,12 @@
- 	TRACE("(%p,%08lx,%08lx,%08lx)\n",This,reserved1,reserved2,flags);
- 
- 	AcquireSRWLockExclusive(&This->lock);
-+
-+	/* ADX marks short 6-channel effects as looping and relies on a later
-+	 * Stop that never arrives under Wine; play them once so the voice is
-+	 * released and the next effect can be allocated. */
-+	if (This->pwfx->nChannels == 6 && This->buflen <= 65536)
-+		flags &= ~DSBPLAY_LOOPING;
- 
- 	This->playflags = flags;
- 	if (This->state == STATE_STOPPED) {
-@@ -662,6 +757,8 @@
+@@ -662,6 +746,8 @@
  	if (!p2)
  		x2 = 0;
  
@@ -135,17 +110,30 @@
  
  #define COBJMACROS
  
-@@ -571,7 +572,8 @@
+@@ -571,7 +572,10 @@
  	}
  
  	for (i = 0; i < channels; ++i)
 -		vols[i] = dsb->volpan.dwTotalAmpFactor[i] / ((float)0xFFFF);
-+		vols[i] = (dsb->pwfx->nChannels == 6) ? 1.0f :
-+			dsb->volpan.dwTotalAmpFactor[i] / ((float)0xFFFF);
++		vols[i] = (dsb->pwfx->nChannels == 6 && dsb->buflen <= 65536 &&
++		           !(dsb->playflags & DSBPLAY_LOOPING) &&
++		           dsb->volpan.lVolume < -1500 && dsb->volpan.lVolume > -9000) ?
++		          1.0f : dsb->volpan.dwTotalAmpFactor[i] / ((float)0xFFFF);
  
  	for(i = 0; i < frames; ++i){
  		for(chan = 0; chan < channels; ++chan){
-@@ -740,6 +742,59 @@
+@@ -594,6 +598,10 @@
+  */
+ static DWORD DSOUND_MixInBuffer(IDirectSoundBufferImpl *dsb, float *mix_buffer, DWORD frames)
+ {
++	/* Short 6-channel ADX effects are flagged looping but never stopped;
++	 * clear it so the voice is released for the next effect. */
++	if (dsb->pwfx->nChannels == 6 && dsb->buflen <= 65536)
++		dsb->playflags &= ~DSBPLAY_LOOPING;
+ 	float *ibuf;
+ 	DWORD oldpos;
+ 
+@@ -740,6 +748,59 @@
   *   =[Volume]=> device->tmp_buffer (float format)
   *   =[Reformat]=> device->buffer (device format, skipped on float)
   */
@@ -205,7 +193,7 @@
  static void DSOUND_PerformMix(DirectSoundDevice *device)
  {
  	DWORD block, pad_bytes, frames;
-@@ -804,6 +859,9 @@
+@@ -804,6 +865,9 @@
  
  			device->normfunction(device->buffer, buffer, frames * device->pwfx->nChannels);
  		}
