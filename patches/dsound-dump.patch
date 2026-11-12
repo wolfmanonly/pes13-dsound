@@ -1,21 +1,25 @@
 --- a/dlls/dsound/buffer.c
 +++ b/dlls/dsound/buffer.c
-@@ -35,6 +35,54 @@
+@@ -34,6 +34,80 @@
+ #include "dsconf.h"
  
  WINE_DEFAULT_DEBUG_CHANNEL(dsound);
- 
++
 +static void dsound_dump_best(IDirectSoundBufferImpl *dsb)
 +{
-+    static LONG best_peak;
++    static struct { void *ptr; int peak; } seen[24];
++    static int nseen;
++    static LONG seq;
++    int i, ch, peak = 0, chpeak[6] = {0};
++    int samples;
 +    const short *pcm;
-+    int samples, i, peak = 0;
-+    char info[192];
++    char path[64], info[256];
 +    int len;
 +    HANDLE h;
 +    DWORD written;
 +
-+    if (!dsb->buffer || !dsb->buffer->memory || dsb->pwfx->wBitsPerSample != 16 ||
-+        dsb->pwfx->nChannels != 6)
++    if (!dsb->buffer || !dsb->buffer->memory ||
++        dsb->pwfx->wBitsPerSample != 16 || dsb->pwfx->nChannels != 6)
 +        return;
 +
 +    samples = dsb->buflen / 2;
@@ -26,12 +30,33 @@
 +            v = -v;
 +        if (v > peak)
 +            peak = v;
++        ch = i % 6;
++        if (v > chpeak[ch])
++            chpeak[ch] = v;
 +    }
-+    if (peak <= best_peak)
++    if (peak < 1000)
 +        return;
-+    best_peak = peak;
 +
-+    h = CreateFileA("C:\\dsound-dump.raw", GENERIC_WRITE, 0, NULL,
++    for (i = 0; i < nseen; i++)
++        if (seen[i].ptr == dsb)
++            break;
++    if (i < nseen) {
++        if (peak <= seen[i].peak + seen[i].peak / 5)
++            return;
++        seen[i].peak = peak;
++    } else if (nseen < 24) {
++        seen[nseen].ptr = dsb;
++        seen[nseen].peak = peak;
++        nseen++;
++    } else
++        return;
++
++    seq = InterlockedIncrement(&seq);
++    if (seq > 24)
++        return;
++
++    wsprintfA(path, "C:\\dsound-voice-%02ld.raw", seq);
++    h = CreateFileA(path, GENERIC_WRITE, 0, NULL,
 +                    CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, NULL);
 +    if (h != INVALID_HANDLE_VALUE) {
 +        WriteFile(h, dsb->buffer->memory, dsb->buflen, &written, NULL);
@@ -39,11 +64,13 @@
 +    }
 +
 +    len = wsprintfA(info,
-+                    "peak=%d devch=%u bufch=%u buflen=%lu vol=%ld pan=%ld flags=0x%08lx\r\n",
-+                    peak, dsb->device->pwfx->nChannels, dsb->pwfx->nChannels,
-+                    dsb->buflen, dsb->volpan.lVolume, dsb->volpan.lPan,
-+                    dsb->dsbd.dwFlags);
-+    h = CreateFileA("C:\\dsound-dump.txt", GENERIC_WRITE, 0, NULL,
++                    "seq=%ld peak=%d vol=%ld pan=%ld flags=0x%08lx "
++                    "ch0=%d ch1=%d ch2=%d ch3=%d ch4=%d ch5=%d\r\n",
++                    seq, peak, dsb->volpan.lVolume, dsb->volpan.lPan,
++                    dsb->dsbd.dwFlags, chpeak[0], chpeak[1], chpeak[2],
++                    chpeak[3], chpeak[4], chpeak[5]);
++    wsprintfA(path, "C:\\dsound-voice-%02ld.txt", seq);
++    h = CreateFileA(path, GENERIC_WRITE, 0, NULL,
 +                    CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, NULL);
 +    if (h != INVALID_HANDLE_VALUE) {
 +        WriteFile(h, info, len, &written, NULL);
@@ -51,16 +78,15 @@
 +    }
 +}
 +
-+
+ 
  /*******************************************************************************
   *		IDirectSoundNotify
-  */
-@@ -312,6 +360,8 @@
- 	int i;
+@@ -662,6 +736,8 @@
+ 	if (!p2)
+ 		x2 = 0;
  
- 	TRACE("(%p,%08lx,%08lx,%08lx)\n",This,reserved1,reserved2,flags);
-+
 +	dsound_dump_best(This);
- 
- 	AcquireSRWLockExclusive(&This->lock);
- 
++
+ 	if((p1 && ((BYTE*)p1 < This->buffer->memory || (BYTE*)p1 >= This->buffer->memory + This->buflen)) ||
+ 	   (p2 && ((BYTE*)p2 < This->buffer->memory || (BYTE*)p2 >= This->buffer->memory + This->buflen)))
+ 		return DSERR_INVALIDPARAM;
