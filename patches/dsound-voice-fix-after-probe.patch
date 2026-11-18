@@ -1,6 +1,6 @@
 --- a/dlls/dsound/buffer.c
 +++ b/dlls/dsound/buffer.c
-@@ -400,6 +400,18 @@
+@@ -400,6 +400,17 @@
  	AcquireSRWLockExclusive(&This->lock);
  
  	This->playflags = flags;
@@ -11,7 +11,6 @@
 +	if (This->pwfx && This->pwfx->nChannels == 6 && This->buflen <= 65536) {
 +		This->playflags &= ~DSBPLAY_LOOPING;
 +		This->sec_mixpos = 0;
-+		This->sec_playpos = 0;
 +		This->use_committed = FALSE;
 +		This->committed_mixpos = 0;
 +		This->state = STATE_STOPPED;
