@@ -113,8 +113,16 @@ jobs:
       - name: Apply voice fix
         run: |
           cd "$PES_BUILD_ROOT/source"
-          patch -p1 --dry-run --fuzz=0 < "$GITHUB_WORKSPACE/patches/dsound-voice-fix.patch"
-          patch -p1 --fuzz=0 < "$GITHUB_WORKSPACE/patches/dsound-voice-fix.patch"
+          # dsound-probe.patch 已在 Play() 的 playflags 行后插入日志，
+          # 占用了原 fix 补丁的上下文，故 logging 开启时改用专用版本。
+          if [ "${{ inputs.logging }}" = "true" ]; then
+            FIX="$GITHUB_WORKSPACE/patches/dsound-voice-fix-after-probe.patch"
+          else
+            FIX="$GITHUB_WORKSPACE/patches/dsound-voice-fix.patch"
+          fi
+          echo "applying $FIX"
+          patch -p1 --dry-run --fuzz=0 < "$FIX"
+          patch -p1 --fuzz=0 < "$FIX"
           grep -c "PES13/CRI ADX reuses" dlls/dsound/buffer.c
 
       - name: Fetch Box64
